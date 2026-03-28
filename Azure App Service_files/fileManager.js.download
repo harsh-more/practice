@@ -1,0 +1,1353 @@
+﻿//Calling dropzone JavaScript
+
+Dropzone.autoDiscover = false;
+//Dropzone for drag/drop zip files to extract the zip files in the respective directory
+var myDropzone = new Dropzone(
+    '#upload-widget-zip', {
+    addRemoveLinks: true,
+    disablePreview: true,
+    dictDefaultMessage: 'Drag a Zip File here to extract & upload, or click to select one',
+    accept: function (file, done) {
+        $('.dz-preview.dz-file-preview').css("display", "none"); //removing preview element of dropzone
+        showhidepaKmanLoader(true);
+        progressBarDisplay(true);
+        // Create a FormData object.
+        var formData = new FormData();
+        formData.append('file', file);
+        if (file.name.indexOf(".zip") > 0) {
+            if (file.fullPath == undefined) {
+                var url = '/api/zip' + curPath + file.name;
+                //url = url.replace(".zip", "");
+                url = url.replace(file.name, "");
+            }
+            else {
+                var url = '/api/zip' + curPath + file.fullPath;
+                url = url.replace(".zip", "");
+            }
+        }
+        else {
+            if (file.fullPath == undefined) {
+                var url = '/api/vfs' + curPath + file.name;
+            }
+            else {
+                var url = '/api/vfs' + curPath + file.fullPath;
+            }
+        }
+
+        //New XMLHttpRequest object
+        let request = new XMLHttpRequest();
+        request.open('PUT', url);
+        request.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        request.setRequestHeader("If-Match", "*");
+
+        // upload progress event
+        request.upload.addEventListener('progress', function (e) {
+            let perc = (e.loaded / e.total) * 100;
+            $('#copy-percentage').text(perc + "%");
+        });
+
+        // Response
+        request.addEventListener('load', function (e) {
+            // HTTP status message
+            if (request.status === 404) {
+                alert('Error 404: Not Found');
+                // Handle 404 specific logic here if needed
+            } else if (request.status >= 300) { // analyze HTTP status of the response
+                alert(`Error ${request.status}: ${request.statusText}`); // e.g. 404: Not Found
+                //Continue after any error and refresh
+                showhidepaKmanLoader(false);
+                progressBarDisplay(false);
+                $(".dz-default.dz-message").css("display", "block");
+                $.get(("/api/vfs" + curPath.trim()), null, function (data) {
+                    generateDynamicTable(data);
+                });
+            } else { // show the result
+                showhidepaKmanLoader(false);
+                progressBarDisplay(false);
+                $(".dz-default.dz-message").css("display", "block");
+                $.get(("/api/vfs" + curPath.trim()), null, function (data) {
+                    generateDynamicTable(data);
+                });
+            }
+        });
+
+        // On error
+        request.onerror = function () {
+            showhidepaKmanLoader(false);
+            progressBarDisplay(false);
+            alert("Error while PUT request!");
+        };
+
+        // Submit Request with zip file
+        request.send(file);
+    }
+});
+
+//File Manager - Main Section
+var root = "/";
+var curPath = "/";
+var directoriesInCurPath = [];
+
+// Track the current URL state to enable proper navigation blocking
+var currentUrlState = window.location.href;
+
+// Function to load ACE searchbox extension
+function loadAceSearchbox() {
+    return new Promise(function(resolve, reject) {
+        // Check if searchbox is already loaded
+        if (ace.require && ace.require.modules && ace.require.modules['ace/ext/searchbox']) {
+            resolve();
+            return;
+        }
+        
+        // Load searchbox extension from local file
+        var script = document.createElement('script');
+        script.src = '/Content/Scripts/ext-searchbox.js';
+        script.onload = function() {
+            resolve();
+        };
+        script.onerror = function() {
+            console.error('Failed to load local searchbox extension');
+            reject(new Error('Failed to load searchbox extension'));
+        };
+        document.head.appendChild(script);
+    });
+}
+
+function displayFileManagerView(pathParam, routePathExists, routeIsFile, errorInLoading = false) {
+    if (pathParam.startsWith('..') || pathParam.startsWith('/')) {
+        alert('Invalid path parameter.');
+        $.get("/api/vfs", null, function (data) {
+            generateDynamicTable(data);
+        });
+    }
+    if (pathParam.split('/').some(segment => segment === '..')) {
+        alert('Invalid path parameter.');
+        $.get("/api/vfs", null, function (data) {
+            generateDynamicTable(data);
+        });
+    }
+    else{
+        // Check if we have server-side path information for route parameter
+        if (errorInLoading || !routePathExists) {
+            if (!routePathExists){
+                alert(`Error 404: ${pathParam} Not Found`);
+            }
+            else{
+                alert(`Error loading ${pathParam}. Please try again.`);
+            }
+            $.get("/api/vfs", null, function (data) {
+                window.history.replaceState({}, document.title, '/newui/filemanager/');
+                currentUrlState = window.location.href;
+                generateDynamicTable(data);
+            });
+        }
+        // Handle based on whether it's a file or directory
+        else if (routeIsFile) {
+            // If it's a file, open the file editor directly
+
+            // Get the directory path for navigation context
+            const fileParts = pathParam.split('/');
+            const fileName = fileParts.pop();
+            const directoryPath = fileParts.join('/');
+            
+            if (directoryPath) {
+                curPath = '/' + directoryPath + '/';
+                directoriesInCurPath = directoryPath.split('/').filter(dir => dir !== '').map((dir, index) => ({
+                    name: dir,
+                    href: `/newui/filemanager/${directoryPath.split('/').filter(d => d !== '').slice(0, index + 1).join('/')}/`,
+                    apiPath: `/api/vfs/${directoryPath.split('/').filter(d => d !== '').slice(0, index + 1).join('/')}/`,
+                    index: index
+                }));
+            } else {
+                curPath = '/';
+                directoriesInCurPath = [];
+            }
+            $.ajax({
+                url: `/api/vfs/${pathParam}`,
+                method: 'HEAD',
+                success: function (data, textStatus, jqXHR) {
+                    displayDirectoryPath();
+                    window.history.replaceState({}, document.title, '/newui/filemanager/' + pathParam);
+                    currentUrlState = window.location.href;
+                    editFile(null, `${window.location.origin}/api/vfs/${pathParam}`, jqXHR.getResponseHeader('Content-Type'), fileName);
+                },
+                error: function(jqXHR, textStatus, errorThrown) {
+                    if (jqXHR.status === 404) {
+                        alert(`Error 404: ${pathParam} Not Found`);
+                    } else {
+                        alert(`Error ${jqXHR.statusText}`);
+                    }
+                }
+            });
+        } else {
+            // It's a directory or unknown - handle as directory
+            curPath = '/' + pathParam;
+            directoriesInCurPath = pathParam.split('/').filter(dir => dir !== '').map((dir, index) => ({
+                name: dir,
+                href: `/newui/filemanager/${pathParam.split('/').filter(d => d !== '').slice(0, index + 1).join('/')}/`,
+                apiPath: `/api/vfs/${pathParam.split('/').filter(d => d !== '').slice(0, index + 1).join('/')}/`,
+                index: index
+            }));
+            $.get(`/api/vfs/${pathParam}`, null, function (data) {
+                displayDirectoryPath();
+                if (pathParam != '') {
+                    window.history.replaceState({}, document.title, '/newui/filemanager/' + pathParam + '/');
+                    currentUrlState = window.location.href;
+                }
+                generateDynamicTable(data);
+            }).fail(function (jqXHR) {
+                if (jqXHR.status === 404) {
+                    alert(`Error 404: ${pathParam} Not Found`);
+                } else {
+                    alert(`Error ${jqXHR.status}: ${jqXHR.statusText}`);
+                }
+            });
+        }
+    }
+}
+
+const _routePathParam = window.routeFilePath || '';
+const _routePathExists = window.routePathExists || false;
+const _routeIsDirectory = window.routeIsDirectory || false;
+const _routeIsFile = window.routeIsFile || false;
+const _pathParam = _routePathParam || '';
+
+if (_pathParam) {
+    try {
+        displayFileManagerView(_pathParam, _routePathExists, _routeIsFile);
+    } catch (error) {
+        $.get("/api/vfs", null, function (data) {
+            window.alert("Error loading the specified path. Redirecting to home directory.");
+            window.history.replaceState({}, document.title, '/newui/filemanager/');
+            currentUrlState = window.location.href;
+            generateDynamicTable(data);
+        });
+    }
+} else {
+    $.get("/api/vfs", null, function (data) {
+        generateDynamicTable(data);
+    });
+}
+
+function generateDynamicTable(fileContent) {
+    var dataFileManager = fileContent.length + 1;
+
+    if (dataFileManager > 0) {
+
+        //generation of dynamic table, based on data.
+        var table = document.createElement("table");
+        table.id = "fileManagerTable";
+        table.className = "table table-striped table-bordered table-hover table-condensed table-responsive";
+        table.style.width = '100%';
+        table.style.display = 'table';
+
+        // retrieve column header
+        var col = []; // define an empty array
+        for (var i = 0; i < dataFileManager; i++) {
+            for (var key in fileContent[i]) {
+                if (col.indexOf(key) === -1) {
+                    col.push(key);
+                }
+            }
+        }
+
+        // CREATE TABLE HEAD .
+        var tHead = document.createElement("thead");
+
+
+        //Add table header row
+        var hRow = document.createElement("tr");
+
+        //Add an empty default column for the table
+        var emptyHeader = document.createElement("th");
+        emptyHeader.style.width = "10%";
+        hRow.appendChild(emptyHeader);
+
+        //Adding column headers (with header names) to the table.
+        for (var i = 0; i < col.length; i++) {
+            var th = document.createElement("th");
+            if ((col[i] != "name") && (col[i] != "size") && (col[i] != "mtime")) {
+                th.innerHTML = col[i];
+                th.style.display = "none";
+            }
+            if (col[i] == "name") {
+                th.style.width = "50%";
+                th.innerText = "Name";
+            }
+            if (col[i] == "size") {
+                th.style.width = "20%";
+                th.innerText = "Size";
+            }
+            if (col[i] == "mtime") {
+                th.style.width = "20%";
+                th.innerText = "Modified Time";
+            }
+            th.style.padding = "0px";
+            hRow.appendChild(th);
+        }
+        tHead.appendChild(hRow);
+        table.appendChild(tHead);
+
+        //creating table body.
+        var tBody = document.createElement("tbody");
+
+        //Adding column to the rows for the respective table.
+        for (var i = 0; i < dataFileManager; i++) {
+
+            var bRow = document.createElement("tr"); //Create a row for each record.
+
+            for (var j = -1; j < col.length; j++) {
+                if (fileContent[i] != undefined) { //checking the default row added for blank folders - skip assignment if data does not exist.
+                    var td = document.createElement("td");
+                    if (j == -1) {
+                        if ((fileContent[i][col[4]]).indexOf("directory") > 0) {
+                            td.innerHTML = "<a id='delIcon' href='#' aria-label='download'><i class='fa fa-times' style='color:black;' title='delete' aria-hidden='true'></i></a>&nbsp;&nbsp;" +
+                                "<a id='dwnIcon' href='#' aria-label='download'><i class='fa fa-download' style='color:black;' aria-hidden='true'></i></a>";
+                        }
+                        else {
+                            td.innerHTML = "<a id='delIcon' href='#' aria-label='download'><i class='fa fa-times' style='color:black;' title='delete' aria-hidden='true'></i></a>&nbsp;&nbsp;" +
+                                "<a id='dwnIcon' href='#' aria-label='download'><i class='fa fa-download' style='color:black;' aria-hidden='true'></i></a>";
+                        }
+                    }
+                    else if (j == 0) {
+                        //check to set the name of the file/folder
+                        if ((fileContent[i][col[4]]).indexOf("directory") > 0) {
+                            // For directories, extract path after /api/vfs/ for the href
+                            var apiPath = fileContent[i][col[5]];
+                            var pathAfterVfs = apiPath.indexOf("/api/vfs/") > -1 ? apiPath.substring(apiPath.indexOf("/api/vfs/") + 9) : "";
+                            td.innerHTML = "<span><i class='fa fa-folder' aria-hidden='true'></i></span>&nbsp;" +
+                                "<a name='fname' href='/newui/filemanager/" + pathAfterVfs + "'>" + fileContent[i][col[j]] + "</a>";
+                        }
+                        else {
+                            // For files, use the direct API URL
+                            var apiPath = fileContent[i][col[5]];
+                            var pathAfterVfs = apiPath.indexOf("/api/vfs/") > -1 ? apiPath.substring(apiPath.indexOf("/api/vfs/") + 9) : "";
+                            td.innerHTML = "<span><i class='fa fa-file' aria-hidden='true'></i></span>&nbsp;" +
+                                "<a name='fname' href='/newui/filemanager/" + pathAfterVfs + "'>" + fileContent[i][col[j]] + "</a>";
+                        }
+                    }
+                    else if (j == 1) {
+                        //check to set the size of the file/folder
+                        if ((fileContent[i][col[4]]).indexOf("directory") <= 0) {
+                            td.innerHTML = "<span name='fsize'>" + fileContent[i][col[j]] ? (Math.ceil(fileContent[i][col[j]] / 1024) + ' KB') : '' + "</span>";
+                        }
+                    }
+                    else if (j == 2) {
+                        //check to set the modified time of the file/folder
+                        td.innerHTML = "<span name='fmdtime'>" + ((fileContent[i][col[j]] && new Date(fileContent[i][col[j]])) || new Date()).toLocaleString() + "</span>";
+                    }
+                    else {
+                        td.innerHTML = fileContent[i][col[j]];
+                        td.style.display = "none";
+                    }
+                    bRow.appendChild(td);
+                }
+            }
+            tBody.appendChild(bRow)
+        }
+        table.appendChild(tBody);
+
+
+        //add the dynamically created table to the div - divFileManager.
+        var divContainer = document.getElementById("divFileManager");
+        if (divContainer != null) {
+            if (divContainer.innerHTML.length > 0) {
+                divContainer.innerHTML = "";
+            }
+            divContainer.appendChild(table);
+            // reStructure();
+        }
+
+    }
+}
+
+//function to put file manager div after dropzone div
+function reStructure() {
+    $("#divFileManager").insertAfter(".dz-default.dz-message:first");
+}
+
+function IfFileEditorIsOpenAndUserDoesntWantsToDiscard(){
+    if ($('.edit-view').is(':visible')) {
+        var editHasNotBeenMade = editor.session.getUndoManager().isClean();
+        if (!editHasNotBeenMade) {
+            var confirmLeave = confirm("You have unsaved changes. Do you really want to leave?");
+            if (!confirmLeave) {
+                return true;
+            }
+        }
+        editor.setValue('');
+        statusbar.reset();
+        $(".edit-view").css('display', 'none');
+        $("#containerFileManager").css('display', 'block');
+        removeAllToasts();
+    }
+    return false;
+}
+
+function addIndividualDirectoryToDirectoriesInCurPath(pathContainer, dir) {
+    var aTag = document.createElement("a");
+    aTag.href = dir.href ? dir.href : "#";
+    aTag.innerText = dir.name;
+    aTag.setAttribute('data-api-path', dir.apiPath);
+    aTag.setAttribute('index', dir.index);
+    pathContainer.appendChild(aTag);
+}
+
+function addSlashToDirectoriesInCurPath(pathContainer) {
+    var slashTag = document.createElement("a");
+    slashTag.style.cursor = 'default';
+    slashTag.style.pointerEvents = 'none';
+    slashTag.innerText = "/";
+    pathContainer.appendChild(slashTag);
+}
+
+function addToDirectoriesInCurPath(dir) {
+    if(directoriesInCurPath.length > 5){
+        displayDirectoryPath();
+        return;
+    }
+    var pathContainer = document.getElementById("pathContainer");
+    addIndividualDirectoryToDirectoriesInCurPath(pathContainer, dir);
+    addSlashToDirectoriesInCurPath(pathContainer);
+}
+
+function displayDirectoryPath(){
+    var pathContainer = document.getElementById("pathContainer");
+    pathContainer.innerHTML = "";
+    if (directoriesInCurPath.length > 5) {
+        let tempDirs = [
+            directoriesInCurPath[0],
+            directoriesInCurPath[1],
+            { 
+                name: "...", 
+                href: directoriesInCurPath[directoriesInCurPath.length - 3].href,
+                apiPath: directoriesInCurPath[directoriesInCurPath.length - 3].apiPath,
+                index: directoriesInCurPath[directoriesInCurPath.length - 3].index 
+            },
+            directoriesInCurPath[directoriesInCurPath.length - 2],
+            directoriesInCurPath[directoriesInCurPath.length - 1]
+        ];
+        tempDirs.forEach(function (dir) {
+            addIndividualDirectoryToDirectoriesInCurPath(pathContainer, dir);
+            addSlashToDirectoriesInCurPath(pathContainer);    
+        });
+    } else {
+        directoriesInCurPath.forEach(function (dir) {
+            addIndividualDirectoryToDirectoriesInCurPath(pathContainer, dir);
+            addSlashToDirectoriesInCurPath(pathContainer);
+        });
+    }
+}
+
+
+function editFile(e, url = null, contentType = null, filename = null) {
+    $(".edit-view").css('display', 'block');
+    //$("#aCurPath").css('display', 'none');
+    $("#containerFileManager").css('display', 'none');
+
+    var url = url ?? e.currentTarget.parentElement.parentElement.cells[6].innerText;
+    var contentType = contentType ?? e.currentTarget.parentElement.parentElement.cells[5].innerText.trim();
+    var filename = filename ?? e.currentTarget.parentElement.parentElement.cells[1].innerText.trim();
+
+    var downloadButton = document.getElementById("downloadFileButton");
+    downloadButton.setAttribute("href", url);
+    downloadButton.setAttribute("download", filename);
+
+    var pathGoesHere = document.getElementById("pathGoesHere");
+    pathGoesHere.innerHTML = '';
+
+    var currentPath = document.getElementById("currentPath");
+    if (currentPath) {
+        var childNodes = currentPath.childNodes;
+        childNodes.forEach(function (child) {
+            pathGoesHere.appendChild(child.cloneNode(true));
+        });
+    }
+    var aTag = document.createElement("a");
+    aTag.innerText = filename;
+    aTag.style.color = "black";
+    pathGoesHere.appendChild(aTag);
+
+    if ($('.edit-view').is(':visible')) {
+        editor.setValue('');
+        var url = url;
+        var filename = filename;
+        var mimeType = contentType;
+        //alert('clicked');
+        statusbar.fetchingContents();
+        getContent(url).then(function (result) {
+            editor.setValue(result);
+            if (mimeType === 'text/xml') {
+                try {
+                    if (typeof vkbeautify === 'undefined') {
+                        $.getScript('./vkbeautify.0.99.00.beta.js', function() {
+                            try {
+                                result = vkbeautify.xml(result);
+                                editor.setValue(result);
+                            } catch (error) {
+                                console.warn('Processing Error: ', error);
+                            }
+                        });
+                    } else {
+                        result = vkbeautify.xml(result);
+                        editor.setValue(result);
+                    }
+                } catch (error) {
+                    console.warn('Processing Error: ', error);
+                }
+            }
+            if (mimeType === 'application/json') {
+                try {
+                    result = JSON.stringify(JSON.parse(result), null, 4);
+                    editor.setValue(result);
+                } catch (error) {
+                    console.warn('Processing Error: ', error);
+                }
+            }
+            editor.getSession().setUndoManager(new ace.UndoManager());
+            statusbar.showFilename(filename);
+            if (typeof filename !== 'undefined') {
+                var modelist = ace.require('ace/ext/modelist');
+                var mode = modelist.getModeForPath(filename).mode;
+                if (mode === 'ace/mode/text') {
+                    mode = getCustomMode(filename);
+                }
+                // Apply computed syntax mode or default to 'ace/mode/text'
+                editor.session.setMode(mode);
+            }
+            // Set Ace height
+            resizeAce();
+            editor.focus();
+            // Attach event handler to set new Ace height on browser resize
+            $(window).on('resize', function () {
+                resizeAce();
+            });
+        });
+    }
+}
+
+//Tracking click event on file/folder name - would be used for in page edit of files.
+$(document).on("click", "a[name='fname']", function (e) {
+    // Prevent default behavior for normal clicks (but allow Ctrl+click to use the href)
+    if (!e.ctrlKey) {
+        e.preventDefault();
+    }
+    
+    if ((e.currentTarget.parentElement.parentElement.cells[5].innerHTML).indexOf("directory") > 0) {
+        
+        if(e.ctrlKey){
+            return; // If Ctrl key is pressed, do not proceed with directory navigation
+        }
+
+        curPath = curPath + e.currentTarget.parentElement.parentElement.cells[1].innerText.trim() + "/";
+        $("#Path").val(curPath);
+        directoriesInCurPath.push({
+            "name": e.currentTarget.parentElement.parentElement.cells[1].innerText.trim(),
+            "href": (function() {
+                var apiPath = e.currentTarget.parentElement.parentElement.cells[6].innerText;
+                var pathAfterVfs = apiPath.indexOf("/api/vfs/") > -1 ? apiPath.substring(apiPath.indexOf("/api/vfs/") + 9) : "";
+                return `/newui/filemanager/${pathAfterVfs}`;
+            })(),
+            "apiPath": e.currentTarget.parentElement.parentElement.cells[6].innerText,
+            "index": directoriesInCurPath.length
+        });
+        
+        // Update URL to reflect the current path
+        var newPath = directoriesInCurPath.map(dir => dir.name).join('/');
+        window.history.replaceState({}, document.title, '/newui/filemanager/' + newPath + '/');
+        currentUrlState = window.location.href;
+
+        addToDirectoriesInCurPath(directoriesInCurPath[directoriesInCurPath.length - 1]);
+        generateDynamicTable([]); // Clear the table before fetching new data
+        $.get(e.currentTarget.parentElement.parentElement.cells[6].innerHTML, null, function (data) {
+            generateDynamicTable(data);
+            if ($("#spaddPath").text() == "/") {
+                $("#spaddPath").text(curPath);
+            }
+            else {
+                $("#spaddPath").text() == "/"
+                $("#spaddPath").text(curPath);
+            }
+        });
+    }
+    else {
+        // If Ctrl key is pressed, open the file in a new tab instead of editing
+        if (!e.ctrlKey) {
+            var newPath = directoriesInCurPath.map(dir => dir.name).join('/');
+            if(newPath != ''){
+                newPath += '/';
+            }
+            window.history.replaceState({}, document.title, '/newui/filemanager/' + newPath + e.currentTarget.parentElement.parentElement.cells[1].innerText.trim());
+            currentUrlState = window.location.href;
+            editFile(e);
+        }
+    }
+});
+
+
+
+//Click event of anchor tag - aCurPath; sets the path to previous directory.
+$(document).on("click", "a[id='aCurPath']", function (e) {
+    if ($("#spaddPath").text() != '') {
+        curPath = curPath.split("/");
+        curPath.pop();
+        curPath.pop();
+        curPath = curPath.join("/").trim() + "/";
+        $.get(("/api/vfs" + curPath), null, function (data) {
+            generateDynamicTable(data);
+            $("#spaddPath").text(curPath);
+        });
+    }
+});
+
+$(document).on("click", "a[id='goHome']", function (e) {
+    if(e.ctrlKey){
+        return; 
+    }
+    e.preventDefault();
+    if(IfFileEditorIsOpenAndUserDoesntWantsToDiscard()){
+        return;
+    }
+    // Update URL to go to home
+    window.history.replaceState({}, document.title, '/newui/filemanager/');
+    currentUrlState = window.location.href;
+    curPath = '/';
+    directoriesInCurPath = [];
+    displayDirectoryPath();
+    generateDynamicTable([]); // Clear the table before fetching new data
+    $.get("/api/vfs/", null, function (data) {
+        generateDynamicTable(data);
+    });
+});
+
+
+$(document).on("click", "#pathContainer a", function (e) {
+    if(e.ctrlKey){
+        return; 
+    }
+    e.preventDefault();
+    if(IfFileEditorIsOpenAndUserDoesntWantsToDiscard()){
+        return;
+    }
+    var apiPath = $(this).data('api-path');
+    var index = $(this).attr('index');
+    directoriesInCurPath = directoriesInCurPath.slice(0, parseInt(index) + 1);
+    curPath = '/' + directoriesInCurPath.map(dir => dir.name).join('/') + '/';
+    
+    // Update URL to reflect the current path
+    var newPath = directoriesInCurPath.map(dir => dir.name).join('/');
+    window.history.replaceState({}, document.title, '/newui/filemanager/' + newPath + '/');
+    currentUrlState = window.location.href;
+    displayDirectoryPath();
+    generateDynamicTable([]); // Clear the table before fetching new data
+    
+    $.get(apiPath, null, function (data) {
+        generateDynamicTable(data);
+    });
+});
+
+//Tracking click event of delete Icon
+$(document).on("click", "a[id='delIcon']", function (e) {
+    var result = confirm('Are you sure to delete the file?');
+    if (result == true) {
+        showhidepaKmanLoader(true);
+        var url = e.currentTarget.parentElement.parentElement.cells[6].innerHTML;
+
+        if (e.currentTarget.parentElement.parentElement.cells[5].innerHTML === "inode/directory") {
+            url += "?recursive=true";
+        }
+        $.ajax({
+            url: url,
+            method: "DELETE",
+            headers: {
+                "If-Match": "*"
+            },
+            success: function (result) {
+                showhidepaKmanLoader(false);
+                $.get(("/api/vfs" + curPath.trim()), null, function (data) {
+                    generateDynamicTable(data);
+                });
+            },
+            error: function (error) {
+                showhidepaKmanLoader(false);
+                alert("Error in delete request!");
+            }
+        });
+    }
+    else {
+        return;
+    }
+});
+
+//Tracking click event of edit Icon
+$(document).on("click", "i[id='editIcon']", function (e) {
+    $(".edit-view").css('display', 'block');
+    //$("#aCurPath").css('display', 'none');
+    $("#containerFileManager").css('display', 'none');
+
+    if ($('.edit-view').is(':visible')) {
+        editor.setValue('');
+        var url = e.currentTarget.parentElement.parentElement.cells[6].innerHTML;
+        var filename = e.currentTarget.parentElement.parentElement.cells[1].innerText.trim();
+        var mimeType = e.currentTarget.parentElement.parentElement.cells[5].innerText.trim()
+        //alert('clicked');
+        statusbar.fetchingContents();
+        getContent(url).then(function (result) {
+            editor.setValue(result);
+            if (mimeType === 'text/xml') {
+                result = vkbeautify.xml(result);
+            }
+            statusbar.showFilename(filename);
+            if (typeof filename !== 'undefined') {
+                var modelist = ace.require('ace/ext/modelist');
+                var mode = modelist.getModeForPath(filename).mode;
+                if (mode === 'ace/mode/text') {
+                    mode = getCustomMode(filename);
+                }
+                // Apply computed syntax mode or default to 'ace/mode/text'
+                editor.session.setMode(mode);
+            }
+            // Set Ace height
+            resizeAce();
+            editor.focus();
+            // Attach event handler to set new Ace height on browser resize
+            $(window).on('resize', function () {
+                resizeAce();
+            });
+        });
+    }
+});
+
+//Tracking click event of download Icon
+$(document).on("click", "a[id='dwnIcon']", function (e) {
+    showhidepaKmanLoader(true);
+    var element = document.createElement('a');
+    if ((e.currentTarget.parentElement.parentElement.cells[5].innerHTML).indexOf("directory") > 0) {
+        var zipUrl = (e.currentTarget.parentElement.parentElement.cells[6].innerText).replace("/vfs/", "/zip/")
+        element.setAttribute('href', zipUrl);
+        element.setAttribute('download', e.currentTarget.parentElement.parentElement.cells[1].innerText.trim() + ".zip");
+    }
+    else {
+        element.setAttribute('href', e.currentTarget.parentElement.parentElement.cells[6].innerText);
+        element.setAttribute('download', e.currentTarget.parentElement.parentElement.cells[1].innerText.trim());
+    }
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+    showhidepaKmanLoader(false);
+});
+
+// **********Ace Combined script from ace - init.js and filebrowser.js************
+// Resize editor window based on browser window.innerHeight
+function resizeAce() {
+    // http://stackoverflow.com/questions/11584061/
+    var new_height = (window.innerHeight - 170) + 'px';
+    $('#editor').css({ 'height': new_height });
+    editor.resize();
+}
+
+// Additional syntax highlight logic
+function getCustomMode(filename) {
+    var _config = (/^(web|app).config$/i);
+    var _csproj = (/.(cs|vb)proj$/i);
+    var _xdt = (/.xdt$/i);
+    var _aspnet = (/.(cshtml|asp|aspx)$/i);
+    var _csx = (/.csx$/i);
+    var syntax_mode = 'ace/mode/text';
+    if (filename.match(_config) ||
+        filename.match(_csproj) ||
+        filename.match(_xdt)) {
+        syntax_mode = 'ace/mode/xml';
+    }
+    if (filename.match(_aspnet) ||
+        filename.match(_csx)) {
+        syntax_mode = 'ace/mode/csharp';
+    }
+
+    return syntax_mode;
+}
+
+// Act II - The Editor Awakens
+var editor = ace.edit("editor");
+editor.setTheme("ace/theme/github");
+editor.getSession().setTabSize(4);
+editor.getSession().setUseSoftTabs(true);
+editor.$blockScrolling = Infinity;
+editor.setOptions({
+    "showPrintMargin": false,
+    "fontSize": 14
+});
+
+// Load searchbox extension and set up search functionality
+loadAceSearchbox().then(function() {
+    // Enable search functionality with keyboard shortcuts
+    editor.commands.addCommand({
+        name: 'find',
+        bindKey: {
+            win: 'Ctrl-F',
+            mac: 'Command-F'
+        },
+        exec: function(editor) {
+            ace.config.loadModule("ace/ext/searchbox", function(e) {
+                e.Search(editor);
+            });
+        }
+    });
+
+    editor.commands.addCommand({
+        name: 'findNext',
+        bindKey: {
+            win: 'F3',
+            mac: 'F3'
+        },
+        exec: function(editor) {
+            editor.findNext();
+        }
+    });
+
+    editor.commands.addCommand({
+        name: 'findPrevious',
+        bindKey: {
+            win: 'Shift-F3',
+            mac: 'Shift-F3'
+        },
+        exec: function(editor) {
+            editor.findPrevious();
+        }
+    });
+
+    editor.commands.addCommand({
+        name: 'replace',
+        bindKey: {
+            win: 'Ctrl-H',
+            mac: 'Command-Option-F'
+        },
+        exec: function(editor) {
+            ace.config.loadModule("ace/ext/searchbox", function(e) {
+                e.Search(editor, true);
+            });
+        }
+    });
+}).catch(function(error) {
+    console.error('Failed to load searchbox extension:', error);
+});
+
+// Show a red bar if content has changed
+var contentHasChanged = false;
+
+editor.on('input', function () {
+    var isClean = editor.session.getUndoManager().isClean();
+    if (!isClean) {
+        contentHasChanged = true;
+        $('#statusbar').removeClass('statusbar-saved');
+        $('#statusbar').addClass('statusbar-red');
+        $('#saveItemButton').prop('disabled', false);
+    } else {
+        contentHasChanged = false;
+        $('#statusbar').removeClass('statusbar-red');
+        $('#statusbar').addClass('statusbar-saved');
+        $('#saveItemButton').prop('disabled', true);
+    }
+});
+
+// Bind CTRL-S as Save without closing
+editor.commands.addCommand({
+    name: 'saveItem',
+    bindKey: {
+        win: 'Ctrl-S',
+        mac: 'Command-S',
+        sender: 'editor|cli'
+    },
+    exec: function (env, args, request) {
+        saveItem();
+    }
+});
+
+this.saveItem = function () {
+    var text = editor.getValue();
+    statusbar.savingChanges();
+    this.setContent(this, text)
+        .done(function () {
+            statusbar.acknowledgeSave();
+            editor.session.getUndoManager().markClean();
+        }).fail(function (error) {
+            removeAllToasts();
+            showErrorAsToast(error);
+            statusbar.errorState.set();
+        });
+}
+
+this.saveItemAndClose = function () {
+    var text = editor.getValue();
+    statusbar.savingChanges();
+    this.setContent(this, text)
+        .done(function () {
+            statusbar.reset();
+
+            $(".edit-view").css('display', 'none');
+            $("#containerFileManager").css('display', 'block');
+            //removeAllToasts();
+            $.get(("/api/vfs" + curPath.trim()), null, function (data) {
+                window.history.replaceState({}, document.title, '/newui/filemanager' + curPath.trim());
+                currentUrlState = window.location.href;
+                generateDynamicTable(data);
+            });
+        }).fail(function (error) {
+            removeAllToasts();
+            showErrorAsToast(error);
+            statusbar.errorState.set();
+        });
+}
+
+this.setContent = function (item, text) {
+    var _url = '/api/vfs' + curPath + item.filename.trim();
+    return $.ajax({
+        url: _url,
+        data: text,
+        method: "PUT",
+        xhr: function () {  // Custom XMLHttpRequest
+            var myXhr = $.ajaxSettings.xhr();
+            if (myXhr.upload) { // Check if upload property exists
+                myXhr.upload.addEventListener('progress', function (e) {
+                    copyProgressHandlingFunction(e, _url);
+                }, false); // For handling the progress of the upload
+            }
+            return myXhr;
+        },
+        processData: false,
+        headers: {
+            "If-Match": "*"
+        }
+    });
+}
+
+this.getContent = function (item) {
+    return $.ajax({
+        url: item,
+        dataType: "text",
+        headers: {
+            "If-Match": "*"
+        }
+    });
+}
+
+this.cancelEdit = function () {
+    editor.setValue('');
+    statusbar.reset();
+    $(".edit-view").css('display', 'none');
+    $("#containerFileManager").css('display', 'block');
+    removeAllToasts();
+    $.get(("/api/vfs" + curPath.trim()), null, function (data) {
+        window.history.replaceState({}, document.title, '/newui/filemanager' + curPath.trim());
+        currentUrlState = window.location.href;
+        generateDynamicTable(data);
+    });
+}
+//monitor file upload progress
+function copyProgressHandlingFunction(e, uniqueUrl, forceUpdateModal) {
+    if (e && uniqueUrl && e.lengthComputable) {
+        copyObjectsManager.addCopyStats(uniqueUrl, e.loaded, e.total); //add/update stats
+    }
+    var perc = copyObjectsManager.getCurrentPercentCompletion(); // perc-per-total transaction
+    var copyObjs = copyObjectsManager.getCopyStats();
+
+    $('#copy-percentage').text(perc + "%");
+
+    if (perc != 100 && perc != 0) {
+        viewModel.isTransferInProgress(true);
+    }
+
+    //handler for clearing out cache once it gets too large
+    var currentObjCount = Object.keys(copyObjs).length;
+    if (currentObjCount > 2000) {
+        for (var i = 0; i < 1000; i++) { //delete oldest 1000 copy prog objects
+            copyObjectsManager.removeAtIndex(0);
+        }
+        var date = new Date();
+        copyObjectsManager.setInfoMessage('Cache was partialy auto-cleared at ' + date.toLocaleString() + ' for performance improvements');
+    }
+
+    if ($('#files-transfered-modal').is(':visible') || forceUpdateModal) { // update if modal visible
+        viewModel.copyProgStats(copyObjs); // update viewmodel
+
+        var modalHeaderText = '';
+        if (perc < 100) {
+            modalHeaderText = 'Transferred Files (<b>' + perc + '%</b>).';
+        } else {
+            modalHeaderText = '<b style =\' color:green\'> Transferred Files (' + perc + '%).</b>';
+        }
+        modalHeaderText += ' ' + ((_temp = copyObjectsManager.getInfoMessage()) ? _temp : "");
+        $('#files-transfered-modal .modal-header').html(modalHeaderText);
+    }
+
+}
+
+// Hook the little pencil glyph and apply Ace syntax mode based on file extension
+//$('.edit').on('click', '.fa-pencil', function () {
+$("#editIcon").click(function () {
+    if ($('.edit-view').is(':visible')) {
+        var filename;
+        try {
+            filename = (window.viewModel.fileEdit.peek()).name();
+        }
+        catch (e) {
+            if (typeof console == 'object') {
+                console.log('Can not get filename. ' + e);
+            }
+        }
+        finally {
+            if (typeof filename !== 'undefined') {
+                var modelist = ace.require('ace/ext/modelist');
+                var mode = modelist.getModeForPath(filename).mode;
+                if (mode === 'ace/mode/text') {
+                    mode = getCustomMode(filename);
+                }
+                // Apply computed syntax mode or default to 'ace/mode/text'
+                editor.session.setMode(mode);
+            }
+            // Set Ace height
+            resizeAce();
+            editor.focus();
+            // Attach event handler to set new Ace height on browser resize
+            $(window).on('resize', function () {
+                resizeAce();
+            });
+        }
+    }
+});
+
+// Custom status bar for Ace (aka Project Wunderbar)
+var statusbar = {
+    showFilename:
+        function (fileName) {
+            try {
+                if (fileName == undefined) {
+                    filename = filename;
+                }
+                else {
+                    filename = fileName
+                }
+            }
+            catch (e) {
+                filename = 'Can not get filename. See console for details.';
+                if (typeof console == 'object') {
+                    console.error('Can not get filename: %s', e);
+                }
+            }
+            finally {
+                $('#statusbar').text(filename);
+            }
+        },
+    reset:
+        function () {
+            $('#statusbar').text('');
+            $('#statusbar').removeClass('statusbar-red');
+            $('#saveItemButton').prop('disabled', true);
+            $('#statusbar').removeClass('statusbar-saved');
+            $('#statusbar').css('background', 'none');
+            // Clear editor window
+            editor.setValue('');
+            // Flag from ace-init.js
+            contentHasChanged = false;
+            // Clear search box
+            try {
+                var searchBox = editor.searchBox;
+                if (searchBox) {
+                    searchBox.searchInput.value = '';
+                    searchBox.replaceInput.value = '';
+                    searchBox.activeInput.value = '';
+                    searchBox.hide();
+                }
+            } catch (e) {
+                // Ignore errors if searchbox is not available
+            }
+        },
+    savingChanges:
+        function () {
+            $('#statusbar').text('Saving changes...');
+            $('#statusbar').prepend('<i class="glyphicon glyphicon-cloud-upload" style="margin-right: 6px"></i>');
+        },
+    fetchingContents:
+        function () {
+            $('#statusbar').text('Fetching contents...');
+            $('#statusbar').prepend('<i class="glyphicon glyphicon-cloud-download" style="margin-right: 6px"></i>');
+        },
+    acknowledgeSave:
+        function () {
+            this.errorState.remove();
+            $('#statusbar').addClass('statusbar-saved');
+            contentHasChanged = false;
+            this.showFilename();
+        },
+    errorState:
+    {
+        set: function () {
+            // We could not save the file
+            // Mild panic attack, turn statusbar red
+            statusbar.showFilename();
+            $('#statusbar').css('background', '#ffdddd');
+        },
+        remove: function () {
+            $('#statusbar').css('background', 'none');
+            $('#statusbar').removeClass('statusbar-red');
+            $('#saveItemButton').prop('disabled', true);
+        }
+    }
+};
+
+var copyObjectsManager = {
+    init: function () {
+        this._copyProgressObjects = {};
+        this.infoMessage = '';
+    },
+    getInfoMessage: function () {
+        return this._infoMessage;
+    },
+    setInfoMessage: function (message) {
+        this._infoMessage = message;
+    },
+    addCopyStats: function (uri, loadedData, totalData) {
+
+        uri = uri.substring(uri.indexOf('/vfs') + 5, uri.length); // slice uri to be prettier[ex: http://localhost:37911/api/vfs/ttesstt//Kudu.FunctionalTests/Vfs/VfsControllerTest.cs => ttesstt//Kudu.FunctionalTests/Vfs/VfsControllerTest.cs]
+        if (this._copyProgressObjects[uri]) {
+            if (loadedData === totalData) {
+                this._copyProgressObjects[uri].endDate = $.now();
+            } else {
+                this._copyProgressObjects[uri].copyPackEnded = false;
+            }
+        } else {
+            this._copyProgressObjects[uri] = {};
+            this._copyProgressObjects[uri].startDate = $.now();
+            this._copyProgressObjects[uri].copyPackEnded = false; //this is used for when copying multiple files in the same time so that i may still have a coherent percentage
+        }
+
+        if (totalData === 0) { // empty files appear to have size 0
+            totalData = loadedData = 1;
+        }
+
+        this._copyProgressObjects[uri].loadedData = loadedData;
+        this._copyProgressObjects[uri].totalData = totalData;
+    },
+    getCopyStats: function () {
+        return this._copyProgressObjects;
+    },
+    getCurrentPercentCompletion: function () {
+        var currentTransfered = 0;
+        var finalTransfered = 0;
+        var foundItem = false;
+
+        for (var key in this._copyProgressObjects) {
+            var co = this._copyProgressObjects[key];
+            if (co.copyPackEnded === false) {
+                foundItem = true;
+                currentTransfered += co.loadedData;
+                finalTransfered += co.totalData;
+            }
+        }
+
+        var perc = 0;
+        if (foundItem) {
+            perc = parseInt((currentTransfered / finalTransfered) * 100);
+        } else { // to avoid 0/0
+            perc = 100;
+        }
+
+        if (perc === 100 && foundItem) { // if all transactions have finished & have some unmarked transaction pack, cancel it out
+            for (var key in this._copyProgressObjects) {
+                this._copyProgressObjects[key].copyPackEnded = true;
+            }
+        }
+
+        return perc;
+    },
+    removeAtIndex: function (index) {
+        delete this._copyProgressObjects[index];
+    },
+    clearData: function () {
+        var date = new Date();
+        this._infoMessage = 'You have cleared the cache at ' + date.toLocaleString();
+        this._copyProgressObjects = {};
+    }
+}
+
+copyObjectsManager.init();
+
+function showErrorAsToast(error) {
+    // Check if 'error' has a status property.
+    // If true, treat as xhr response, otherwise string.
+    if (error.status) {
+        try {
+            var message = JSON.parse(error.responseText).Message;
+        }
+        catch (e) {
+            // error.responseText may be poisoned with HTML
+            // (i.e. session expires and the 403 Forbidden response from App Service contains tons of markup)
+            // Let's just ignore it if that's the case. We would need Cortana or something to parse that and
+            // extract a meaningful message.
+            if (!(/\<html\>/i.test(error.responseText))) {
+                var message = error.responseText;
+            }
+        }
+        var status = error.status;
+        var statusText = error.statusText;
+        var textToRender = status + ' ' + statusText + (typeof message !== 'undefined' ? ': ' + message : '');
+        toast(textToRender);
+    }
+    // 'error' is a string
+    else toast(error);
+}
+
+function toast(errorMsg) {
+    var scaffold = '\
+        <div class="row row-eq-height error notification">\
+            <div id="toast-close" class="col-md-1">\
+                <i class="glyphicon glyphicon-remove" aria-hidden="true"></i>\
+            </div>\
+            <div id="toast-msg" class="col-md-10">\
+                <p><strong>ERROR</strong></p>' +
+        errorMsg +
+        '</div>\
+        </div>';
+    var item = $(scaffold);
+    $('#toast').append($(item));
+    $(item).animate({ 'right': '12px' }, 'fast');
+    $('#toast').on('click', '#toast-close', function () {
+        var notification = $(this).parent();
+        notification.animate({ 'right': '-400px' }, function () {
+            notification.remove();
+        });
+    });
+}
+
+function removeAllToasts() {
+    $('.notification').remove();
+}
+
+function showhidepaKmanLoader(shVal) {
+    if (shVal) {
+        $('.paKman').show();
+    }
+    else {
+        $('.paKman').hide();
+    }
+}
+
+function progressBarDisplay(shVal) {
+    if (shVal) {
+        $('.btn.btn-info.box-border').show();
+    }
+    else {
+        $('.btn.btn-info.box-border').hide();
+    }
+}
+
+function showAceHelpModal() {
+    $('#ace-help-modal').modal();
+    //Can also be loaded from DebugConsole using path ~/Pages/filename
+    $('#ace-help-modal .modal-body').load('/Content/AceHelp.html',
+        function (response, status, xhr) {
+            if (status == 'error') {
+                $(this).html('<div class="alert alert-warning" role="alert">' +
+                    'Yikes! Can not load help page:<br>' +
+                    'Error Code ' + xhr.status + ' ' + xhr.statusText + '</div>');
+                if (typeof console == 'object') {
+                    console.error('Can not load help page: ' + 'xhr.status = ' +
+                        xhr.status + ' ' + xhr.statusText);
+                }
+            }
+        });
+}
+
+$("#tblFileManager.table-responsive").hover(function () {
+    $("#upload-widget-zip.dropzone.dz-clickable").css("background-color", "#f1f1f1");
+    $("#upload-widget-zip.dropzone.dz-clickable").height($("#upload-widget.dropzone.dz-clickable").height());
+}, function () {
+    $("#upload-widget-zip.dropzone.dz-clickable").css("background-color", "");
+});
+
+
+// Handle browser back/forward navigation
+window.addEventListener('popstate', function(event) {
+    // Check if file editor is open and has unsaved changes
+    if ($('.edit-view').is(':visible')) {
+        var editHasNotBeenMade = editor.session.getUndoManager().isClean();
+        if (!editHasNotBeenMade) {
+            var confirmLeave = confirm("You have unsaved changes. Do you really want to leave?");
+            if (!confirmLeave) {
+                // User wants to stay - restore the previous URL without triggering popstate
+                history.pushState(null, null, currentUrlState);
+                return;
+            }
+            // User confirmed to leave - close editor
+            editor.setValue('');
+            statusbar.reset();
+            $(".edit-view").css('display', 'none');
+            $("#containerFileManager").css('display', 'block');
+            removeAllToasts();
+        } else {
+            // No unsaved changes - close editor normally
+            if ($('.edit-view').is(':visible')) {
+                editor.setValue('');
+                statusbar.reset();
+                $(".edit-view").css('display', 'none');
+                $("#containerFileManager").css('display', 'block');
+                removeAllToasts();
+            }
+        }
+    }
+    
+    // Update current URL state for future navigation blocking
+    currentUrlState = window.location.href;
+    
+    // Get the current path from the URL
+    var currentPath = window.location.pathname;
+    var fileManagerBasePath = '/newui/filemanager/';
+    
+    if (currentPath.startsWith(fileManagerBasePath)) {
+        var pathParam = currentPath.substring(fileManagerBasePath.length);
+        pathParam = pathParam.trim().split('/').filter(segment => segment !== '').join('/');
+
+        if (!pathParam) {
+            // If no path parameter, load root directory
+            displayFileManagerView('', true, false);
+            return;
+        }
+
+        // Check if it's a file or directory by making a HEAD request
+        fetch(`/api/vfs/${pathParam}`, {
+            method: 'HEAD',
+            redirect: 'manual'  // This prevents automatic redirect following
+        }).then(function(response) {            
+            if (response.status === 307 || response.type === 'opaqueredirect') {
+                // redirect or opaque redirect means it's a directory (needs trailing slash)
+                displayFileManagerView(pathParam, true, false);
+            } else if (response.status === 200) {
+                // 200 means it's a file
+                displayFileManagerView(pathParam, true, true);
+            } else if (response.status === 404) {
+                // 404 means path doesn't exist
+                displayFileManagerView(pathParam, false, false);
+            } else {
+                // Other status codes
+                displayFileManagerView(pathParam, false, false, true);
+            }
+        }).catch(function(error) {
+            displayFileManagerView(pathParam, false, false);
+        });
+    }
+});
+
+// Handle beforeunload to prevent navigation away from unsaved changes
+window.addEventListener('beforeunload', function(event) {
+    if ($('.edit-view').is(':visible')) {
+        var editHasNotBeenMade = editor.session.getUndoManager().isClean();
+        if (!editHasNotBeenMade) {
+            // Prevent navigation and show browser's confirmation dialog
+            event.preventDefault();
+            event.returnValue = 'You have unsaved changes. Do you really want to leave?';
+            return event.returnValue;
+        }
+    }
+});

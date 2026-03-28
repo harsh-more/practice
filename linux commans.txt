@@ -1,0 +1,38 @@
+Day 1-DevOps started 
+Learning Linux Commands
+
+cd		 -for change Directory
+ls		 -content inside the current directory
+mkdir		 -create new folder/directory
+touch		 -create new file like txt
+nano		 -write in file/ modify the file
+cat		 -read the file /txt
+ctrl + c	 -Stop command
+cd..		 -back in directory
+cd ~ 		 -redirect direct home directory
+clear 		 -tearminal clean
+history 	 -to check previusly rum command
+rm 		 -delete file/folder
+cp 		 -crating a copy of file
+
+Day 2 19 march 2026
+Learning Linux advance
+
+ls -l		-folder/file with thir permission
+chmod		-change the permissin
+7		rwx	read + write + execute
+4		r	read
+2		w	write
+1		x	execute
+chown		change file/folder ownership
+
+find . -name "name of file who want search"
+grep "search word in file " notes.txt(file whare search)	
+
+df -h		-check storage
+du -h		-file size
+
+ps aux		-process status
+ps aux | grep ssh -ssh process
+top		-live process
+ping 
